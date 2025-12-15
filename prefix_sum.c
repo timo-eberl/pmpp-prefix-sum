@@ -12,10 +12,13 @@ void prefix_sum_sequential(int input[], int n, int output[]) {
 	}
 }
 
-void print_array_head(int arr[], int n, int limit) {
-	int m = (limit < n) ? limit : n;
-	for (int i = 0; i < m; i++) printf("%d\t", arr[i]);
-	printf(n > limit ? "... (truncated)\n" : "\n");
+void print_array_sample(int arr[], int n, int limit) {
+	int width = limit / 2;
+	for (int i = 0; i < n; i++) {
+		// If array is too big and we reached the middle, jump to the end
+		if (n > limit && i == width) { printf(" .......... "); i = n - width - 1; continue; }
+		printf("%12d", arr[i]);
+	} printf("\n");
 }
 
 // unix only
@@ -26,26 +29,27 @@ double get_time() {
 }
 
 int main() {
-	int n = 200000000;
+	int n = 500000000;
 	size_t bytes = n * sizeof(int);
 	printf("Initializing %d elements (%.2f MB)...\n", n, bytes / (1024.0 * 1024.0));
-	int* data = (int*)malloc(bytes);
-	for (int i = 0; i < n; i++) data[i] = i; // Initialize data
+	int* input_data = (int*)malloc(bytes);
+	for (int i = 0; i < n; i++) input_data[i] = 1; // Initialize data
+
+	int* reference_result = (int*)malloc(n * sizeof(int));
 
 	{
-		int* result = (int*)malloc(n * sizeof(int));
 		double start = get_time();
-		prefix_sum_sequential(data, n, result);
+		prefix_sum_sequential(input_data, n, reference_result);
 		double end = get_time();
 
 		printf("CPU Sequential:\n");
 		printf("\tTime: %.4f s\n", end - start);
-		printf("\tOriginal Array:   "); print_array_head(data, n, 20);
-		printf("\tPrefix Sum Array: "); print_array_head(result, n, 20);
-		free(result);
+		printf("\tOriginal Array:   "); print_array_sample(input_data, n, 20);
+		printf("\tPrefix Sum Array: "); print_array_sample(reference_result, n, 20);
 	}
 
-	free(data);
+	free(input_data);
+	free(reference_result);
 
 	return 0;
 }
