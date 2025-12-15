@@ -87,37 +87,51 @@ void prefix_sum_thrust(const int* d_input, int n, int* d_output) {
 
 typedef void (*ps_func)(const int*, int, int*);
 
-// Generic runner for both CPU (Host Ptrs) and GPU (Device Ptrs)
-void run_test(const char* name, ps_func func, 
-              const int* exec_in, int* exec_out,   // Pointers used for execution (Host or Device)
-              const int* host_in, int* host_out,   // Pointers used for verification/printing (Host)
-              const int* ref, int n, bool is_gpu) {
-	
+void run_test(
+	const char* name, ps_func func, const int* input, int n, const int* ref, bool is_gpu
+) {
 	size_t bytes = n * sizeof(int);
+	int* output = (int*)malloc(bytes);
+	double duration = 0.0;
 
-	// Zero output to ensure no data leaks from previous runs
-	if (is_gpu) { cudaMemset(exec_out, 0, bytes); }
-	else { memset(exec_out, 0, bytes); }
+	if (is_gpu) {
+		int *d_in, *d_out;
+		if (cudaMalloc(&d_in, bytes) != cudaSuccess || cudaMalloc(&d_out, bytes) != cudaSuccess) {
+			fprintf(stderr, "GPU Malloc Failed\n"); free(output); return;
+		}
+		cudaMemcpy(d_in, input, bytes, cudaMemcpyHostToDevice);
+		cudaMemset(d_out, 0, bytes);
+		cudaDeviceSynchronize();
 
-	if (is_gpu) cudaDeviceSynchronize(); // Ensure setup is done before timing
-	double start = get_time();
-	func(exec_in, n, exec_out);
-	if (is_gpu) cudaDeviceSynchronize(); // Ensure kernel finished
-	double duration = get_time() - start;
+		double start = get_time();
+		func(d_in, n, d_out);
+		cudaDeviceSynchronize();
+		duration = get_time() - start;
 
-	if (is_gpu) { cudaMemcpy(host_out, exec_out, bytes, cudaMemcpyDeviceToHost); }
+		cudaMemcpy(output, d_out, bytes, cudaMemcpyDeviceToHost);
+		cudaFree(d_in); cudaFree(d_out);
+	} 
+	else {
+		memset(output, 0, bytes);
+
+		double start = get_time();
+		func(input, n, output);
+		duration = get_time() - start;
+	}
 
 	// Verification
 	bool valid = true;
 	for (int i = 0; i < n; i++) {
-		if (host_out[i] != ref[i]) valid = false;
+		if (output[i] != ref[i]) valid = false;
 	}
 
 	// Print info
 	printf("%-20s Time: %.5fs | Valid: %s\n", name, duration, valid ? "YES" : "NO");
-	printf("\tInput:     "); print_array_sample(host_in, n, 16);
-	printf("\tOutput:    "); print_array_sample(host_out, n, 16);
-	printf("\tReference: "); print_array_sample((int*)ref, n, 16);
+	printf("\tInput:     "); print_array_sample(input, n, 16);
+	printf("\tOutput:    "); print_array_sample(output, n, 16);
+	printf("\tReference: "); print_array_sample(ref, n, 16);
+
+	free(output);
 }
 
 int main() {
@@ -128,34 +142,22 @@ int main() {
 	size_t bytes = n * sizeof(int);
 
 	printf("Initializing %d elements (%.2f MiB)...\n", n, bytes / (1024.0 * 1024.0));
-	
-	// Host Memory
-	int* data = (int*)malloc(bytes);
-	int* result = (int*)malloc(bytes);
+
+	int* input = (int*)malloc(bytes);
 	int* ref = (int*)malloc(bytes);
 
-	// GPU Memory
-	int *d_in, *d_out;
-	if (cudaMalloc(&d_in, bytes) != cudaSuccess || cudaMalloc(&d_out, bytes) != cudaSuccess) {
-		fprintf(stderr, "GPU Memory Allocation Failed\n");
-		return 1;
-	}
+	// Initialize input data
+	for (int i = 0; i < n; i++) { input[i] = rand() % (max_input_value+1); }
+	// Prepare reference data (use sequential sum as source of truth)
+	prefix_sum_sequential(input, n, ref);
 
-	// Initialize Data
-	for (int i = 0; i < n; i++) { data[i] = rand() % (max_input_value+1); }
-	cudaMemcpy(d_in, data, bytes, cudaMemcpyHostToDevice);
+	bool is_gpu = false;
+	run_test("CPU Sequential", prefix_sum_sequential, input, n, ref, is_gpu);
+	run_test("CPU Multi-threaded", prefix_sum_omp, input, n, ref, is_gpu);
+	is_gpu = true;
+	run_test("GPU Thrust library", prefix_sum_thrust, input, n, ref, is_gpu);
 
-	prefix_sum_sequential(data, n, ref); // prepare reference data (sequential sum is source of truth)
-
-	// CPU: exec ptrs == host ptrs, is_gpu = false
-	run_test("CPU Sequential", prefix_sum_sequential, data, result, data, result, ref, n, false);
-	run_test("CPU Multi-threaded", prefix_sum_omp, data, result, data, result, ref, n, false);
-
-	// GPU: exec ptrs = device, host ptrs = host, is_gpu = true
-	run_test("GPU Thrust library", prefix_sum_thrust, d_in, d_out, data, result, ref, n, true);
-
-	cudaFree(d_in); cudaFree(d_out);
-	free(data); free(result); free(ref);
+	free(input); free(ref);
 
 	return 0;
 }
