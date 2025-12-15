@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <omp.h>
+#include <limits.h>
 
 // --- Helpers ---
 
@@ -105,17 +106,16 @@ void run_test(const char* name, ps_func func, const int* input, int n, int* outp
 }
 
 int main() {
-	int n = 500000000;
+	const int n = 1000000000; // don't set above 1000000000, otherwise it will crash
+	const int max_input_value = 2;
+	assert((unsigned long long)n * max_input_value < INT_MAX); // ensure it can't overflow
 	size_t bytes = n * sizeof(int);
-	printf("Initializing %d elements (%.2f MB)...\n", n, bytes / (1024.0 * 1024.0));
 
+	printf("Initializing %d elements (%.2f MiB)...\n", n, bytes / (1024.0 * 1024.0));
 	int* data = (int*)malloc(bytes);
 	int* result = (int*)malloc(bytes);
 	int* ref = (int*)malloc(bytes);
-
-	// Init data (using 1s makes math easy: index i should be i+1)
-	#pragma omp parallel for
-	for (int i = 0; i < n; i++) data[i] = 1;
+	for (int i = 0; i < n; i++) { data[i] = rand() % (max_input_value+1); }
 
 	// Sequential (Source of Truth)
 	run_test("CPU Sequential", prefix_sum_sequential, data, n, ref, NULL);
