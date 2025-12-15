@@ -5,6 +5,7 @@
 #include <time.h>
 #include <string.h>
 #include <stdbool.h>
+#include <omp.h>
 
 // --- Helpers ---
 
@@ -31,6 +32,46 @@ void prefix_sum_sequential(const int* input, int n, int* output) {
 	for (int i = 1; i < n; i++) {
 		output[i] = output[i - 1] + input[i];
 	}
+}
+
+void prefix_sum_omp(const int* input, int n, int* output) {
+	int n_threads = omp_get_max_threads();
+	int* offsets = (int*)malloc((n_threads + 1) * sizeof(int));
+	offsets[0] = 0;
+
+	#pragma omp parallel
+	{
+		int id = omp_get_thread_num();
+		int chunk = (n + n_threads - 1) / n_threads;
+		int start = id * chunk;
+		int end = (start + chunk < n) ? start + chunk : n;
+
+		// 1. Local Prefix Sum
+		if (start < n) {
+			output[start] = input[start];
+			for (int i = start + 1; i < end; i++) {
+				output[i] = output[i - 1] + input[i];
+			}
+			offsets[id + 1] = output[end - 1];
+		}
+		else {
+			offsets[id + 1] = 0;
+		}
+		#pragma omp barrier
+
+		// 2. Calculate Offsets (Single thread)
+		#pragma omp single
+		{
+			for (int i = 1; i <= n_threads; i++) offsets[i] += offsets[i - 1];
+		} // Implicit barrier
+
+		// 3. Apply Offsets
+		if (start < n && id > 0) {
+			int off = offsets[id];
+			for (int i = start; i < end; i++) output[i] += off;
+		}
+	}
+	free(offsets);
 }
 
 // --- Testing Framework ---
@@ -76,14 +117,11 @@ int main() {
 	#pragma omp parallel for
 	for (int i = 0; i < n; i++) data[i] = 1;
 
-	printf("\n--- Benchmarks ---\n");
-
 	// Sequential (Source of Truth)
-	// We pass NULL as ref because this IS the ref
 	run_test("CPU Sequential", prefix_sum_sequential, data, n, ref, NULL);
 
 	// OpenMP
-	// run_test("CPU Multi-threaded", prefix_sum_omp, data, n, result, ref);
+	run_test("CPU Multi-threaded", prefix_sum_omp, data, n, result, ref);
 
 	free(data); free(result); free(ref);
 
