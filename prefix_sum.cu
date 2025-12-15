@@ -6,6 +6,9 @@
 #include <stdbool.h>
 #include <omp.h>
 #include <limits.h>
+#include <cuda_runtime.h>
+#include <thrust/scan.h>
+#include <thrust/device_ptr.h>
 
 // --- Helpers ---
 
@@ -74,54 +77,84 @@ void prefix_sum_omp(const int* input, int n, int* output) {
 	free(offsets);
 }
 
+void prefix_sum_thrust(const int* d_input, int n, int* d_output) {
+	thrust::device_ptr<const int> t_in(d_input);
+	thrust::device_ptr<int> t_out(d_output);
+	thrust::inclusive_scan(t_in, t_in + n, t_out);
+}
+
 // --- Testing Framework ---
 
 typedef void (*ps_func)(const int*, int, int*);
 
-void run_test(const char* name, ps_func func, const int* input, int n, int* output, const int* ref) {
-	// Reset output to 0 to ensure no data leaks from previous runs
-	memset(output, 0, n * sizeof(int));
+// Generic runner for both CPU (Host Ptrs) and GPU (Device Ptrs)
+void run_test(const char* name, ps_func func, 
+              const int* exec_in, int* exec_out,   // Pointers used for execution (Host or Device)
+              const int* host_in, int* host_out,   // Pointers used for verification/printing (Host)
+              const int* ref, int n, bool is_gpu) {
+	
+	size_t bytes = n * sizeof(int);
 
-	// Measure Time
+	// Zero output to ensure no data leaks from previous runs
+	if (is_gpu) { cudaMemset(exec_out, 0, bytes); }
+	else { memset(exec_out, 0, bytes); }
+
+	if (is_gpu) cudaDeviceSynchronize(); // Ensure setup is done before timing
 	double start = get_time();
-	func(input, n, output);
+	func(exec_in, n, exec_out);
+	if (is_gpu) cudaDeviceSynchronize(); // Ensure kernel finished
 	double duration = get_time() - start;
 
-	// Verify (if ref provided)
+	if (is_gpu) { cudaMemcpy(host_out, exec_out, bytes, cudaMemcpyDeviceToHost); }
+
+	// Verification
 	bool valid = true;
-	if (ref) {
-		for (int i = 0; i < n; i++) {
-			if (output[i] != ref[i]) { valid = false; break; }
-		}
+	for (int i = 0; i < n; i++) {
+		if (host_out[i] != ref[i]) valid = false;
 	}
 
 	// Print info
-	printf("%-20s Time: %.5fs", name, duration);
-	if(ref) printf(" | Valid: %s", valid ? "YES" : "NO");
-	printf("\n");
-	printf("\tInput:     "); print_array_sample(input, n, 16);
-	printf("\tOutput:    "); print_array_sample(output, n, 16);
-	if(ref) { printf("\tReference: "); print_array_sample((int*)ref, n, 16); }
+	printf("%-20s Time: %.5fs | Valid: %s\n", name, duration, valid ? "YES" : "NO");
+	printf("\tInput:     "); print_array_sample(host_in, n, 16);
+	printf("\tOutput:    "); print_array_sample(host_out, n, 16);
+	printf("\tReference: "); print_array_sample((int*)ref, n, 16);
 }
 
 int main() {
-	const int n = 500000000; // don't set above 1000000000, otherwise it will crash
-	const int max_input_value = 2;
+	const int n = 100000000; // above 500000000 may fail at GPU memory allocation
+	const int max_input_value = 3;
+
 	assert((unsigned long long)n * max_input_value < INT_MAX); // ensure it can't overflow
 	size_t bytes = n * sizeof(int);
 
 	printf("Initializing %d elements (%.2f MiB)...\n", n, bytes / (1024.0 * 1024.0));
+	
+	// Host Memory
 	int* data = (int*)malloc(bytes);
 	int* result = (int*)malloc(bytes);
 	int* ref = (int*)malloc(bytes);
+
+	// GPU Memory
+	int *d_in, *d_out;
+	if (cudaMalloc(&d_in, bytes) != cudaSuccess || cudaMalloc(&d_out, bytes) != cudaSuccess) {
+		fprintf(stderr, "GPU Memory Allocation Failed\n");
+		return 1;
+	}
+
+	// Initialize Data
 	for (int i = 0; i < n; i++) { data[i] = rand() % (max_input_value+1); }
+	cudaMemcpy(d_in, data, bytes, cudaMemcpyHostToDevice);
 
-	// Sequential (Source of Truth)
-	run_test("CPU Sequential", prefix_sum_sequential, data, n, ref, NULL);
+	prefix_sum_sequential(data, n, ref); // prepare reference data (sequential sum is source of truth)
 
-	// OpenMP
-	run_test("CPU Multi-threaded", prefix_sum_omp, data, n, result, ref);
+	// CPU: exec ptrs == host ptrs, is_gpu = false
+	run_test("CPU Sequential", prefix_sum_sequential, data, result, data, result, ref, n, false);
+	run_test("CPU Multi-threaded", prefix_sum_omp, data, result, data, result, ref, n, false);
 
+	// GPU: exec ptrs = device, host ptrs = host, is_gpu = true
+	run_test("GPU Thrust library", prefix_sum_thrust, d_in, d_out, data, result, ref, n, true);
+
+	cudaFree(d_in); cudaFree(d_out);
 	free(data); free(result); free(ref);
 
 	return 0;
