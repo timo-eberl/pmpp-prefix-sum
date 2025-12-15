@@ -1,4 +1,3 @@
-#define _POSIX_C_SOURCE 199309L // we use POSIX time
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -106,7 +105,7 @@ void run_test(const char* name, ps_func func, const int* input, int n, int* outp
 }
 
 int main() {
-	const int n = 1000000000; // don't set above 1000000000, otherwise it will crash
+	const int n = 500000000; // don't set above 1000000000, otherwise it will crash
 	const int max_input_value = 2;
 	assert((unsigned long long)n * max_input_value < INT_MAX); // ensure it can't overflow
 	size_t bytes = n * sizeof(int);
