@@ -135,7 +135,7 @@ void scan_kogge_stone(const int* d_input, int n, int* d_out, void* workspace) {
 	kogge_stone_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n);
 }
 
-__global__ void brent_kung_kernel(const int* d_in, int* d_out, int n) {
+__global__ void brent_kung_kernel(const int* d_in, int* d_out, int n, int* d_aux) {
 	// Each thread handles 2 elements
 	const int SECTION_SIZE = 2 * BLOCK_SIZE;
 	__shared__ int temp[SECTION_SIZE];
@@ -173,11 +173,16 @@ __global__ void brent_kung_kernel(const int* d_in, int* d_out, int n) {
 	__syncthreads();
 	if (i < n) d_out[i] = temp[tid];
 	if (i + blockDim.x < n) d_out[i + blockDim.x] = temp[tid + blockDim.x];
+
+	// Write block sum to auxiliary array (last thread has the total)
+	if (d_aux != nullptr && tid == 0) {
+		d_aux[blockIdx.x] = temp[SECTION_SIZE - 1];
+	}
 }
 
 void scan_brent_kung(const int* d_input, int n, int* d_out, void* workspace) {
 	assert(n <= BLOCK_SIZE*2);
-	brent_kung_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n);
+	brent_kung_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n, nullptr);
 }
 
 __device__ void perform_coarse_scan(
@@ -248,12 +253,6 @@ void scan_coarsened(const int* d_input, int n, int* d_out, void* workspace) {
 	coarsened_scan_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n);
 }
 
-size_t workspace_segmented(int n) {
-	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR;
-	int num_blocks = (n + SECTION_SIZE - 1) / SECTION_SIZE;
-	return num_blocks * sizeof(int);
-}
-
 // Segmented Scan Kernel 1: Block-wise Coarsened Scan
 __global__ void segmented_scan_block_kernel(const int* d_in, int* d_out, int* d_aux, int n) {
 	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR;
@@ -263,15 +262,14 @@ __global__ void segmented_scan_block_kernel(const int* d_in, int* d_out, int* d_
 }
 
 // Segmented Scan Kernel 3: Add Offsets Kernel
-__global__ void add_block_sums_kernel(int* d_out, const int* d_aux, int n) {
-	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR;
+__global__ void add_block_sums_kernel(int* d_out, const int* d_aux, int n, int elems_per_block) {
 	if (blockIdx.x == 0) return;
 
 	int offset = d_aux[blockIdx.x - 1];
-	int block_offset = blockIdx.x * SECTION_SIZE;
+	int block_offset = blockIdx.x * elems_per_block;
 	int tid = threadIdx.x;
 
-	for (int i = 0; i < COARSE_FACTOR; ++i) {
+	for (int i = 0; i < elems_per_block / BLOCK_SIZE; ++i) {
 		int global_idx = block_offset + tid + i * BLOCK_SIZE;
 		if (global_idx < n) {
 			d_out[global_idx] += offset;
@@ -279,11 +277,18 @@ __global__ void add_block_sums_kernel(int* d_out, const int* d_aux, int n) {
 	}
 }
 
-void scan_segmented(const int* d_input, int n, int* d_out, void* workspace) {
+size_t workspace_segm_coarse(int n) {
 	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR;
 	int num_blocks = (n + SECTION_SIZE - 1) / SECTION_SIZE;
+	return num_blocks * sizeof(int);
+}
+
+void scan_segm_coarse(const int* d_input, int n, int* d_out, void* workspace) {
+	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR;
+	int num_blocks = (n + SECTION_SIZE - 1) / SECTION_SIZE;
+
 	assert(num_blocks <= SECTION_SIZE);
-	assert(n <= SECTION_SIZE*SECTION_SIZE); // essentially the same
+	assert(n <= SECTION_SIZE*SECTION_SIZE); // essentially the same check
 
 	int* d_aux = (int*)workspace;
 
@@ -293,9 +298,36 @@ void scan_segmented(const int* d_input, int n, int* d_out, void* workspace) {
 	if (num_blocks < 2) return; // exit early
 
 	// Step 2: Perform Scan on Block Sums
-	// We use the existing single-block coarsened kernel.
 	coarsened_scan_kernel<<<1, BLOCK_SIZE>>>(d_aux, d_aux, num_blocks);
 
 	// Step 3: Add scanned block sums to the result
-	add_block_sums_kernel<<<num_blocks, BLOCK_SIZE>>>(d_out, d_aux, n);
+	add_block_sums_kernel<<<num_blocks, BLOCK_SIZE>>>(d_out, d_aux, n, SECTION_SIZE);
+}
+
+size_t workspace_segm_brent_kung(int n) {
+	const int SECTION_SIZE = BLOCK_SIZE * 2;
+	int num_blocks = (n + SECTION_SIZE - 1) / SECTION_SIZE;
+	return num_blocks * sizeof(int);
+}
+
+void scan_segm_brent_kung(const int* d_input, int n, int* d_out, void* workspace) {
+	// Brent-Kung processes 2 * BLOCK_SIZE elements per block
+	const int SECTION_SIZE = BLOCK_SIZE * 2;
+	int num_blocks = (n + SECTION_SIZE - 1) / SECTION_SIZE;
+
+	assert(num_blocks <= SECTION_SIZE);
+	assert(n <= SECTION_SIZE*SECTION_SIZE); // essentially the same check
+	
+	int* d_aux = (int*)workspace;
+
+	// Step 1: Perform Local Scans and generate Block Sums
+	brent_kung_kernel<<<num_blocks, BLOCK_SIZE>>>(d_input, d_out, n, d_aux);
+
+	if (num_blocks < 2) return; // exit early
+
+	// Step 2: Perform Scan on Block Sums
+	brent_kung_kernel<<<1, BLOCK_SIZE>>>(d_aux, d_aux, num_blocks, nullptr);
+
+	// Step 3: Add scanned block sums to the result
+	add_block_sums_kernel<<<num_blocks, BLOCK_SIZE>>>(d_out, d_aux, n, SECTION_SIZE);
 }

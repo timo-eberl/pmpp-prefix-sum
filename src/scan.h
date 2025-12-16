@@ -29,8 +29,10 @@ void scan_thrust(const int* d_input, int n, int* d_out, void* workspace);
 void scan_kogge_stone(const int* d_input, int n, int* d_out, void* workspace);
 void scan_brent_kung(const int* d_input, int n, int* d_out, void* workspace);
 void scan_coarsened(const int* d_input, int n, int* d_out, void* workspace);
-size_t workspace_segmented(int n);
-void scan_segmented(const int* d_input, int n, int* d_out, void* workspace);
+size_t workspace_segm_coarse(int n);
+void scan_segm_coarse(const int* d_input, int n, int* d_out, void* workspace);
+size_t workspace_segm_brent_kung(int n);
+void scan_segm_brent_kung(const int* d_input, int n, int* d_out, void* workspace);
 
 // Helpers
 void print_array_sample(const int* arr, int n, int limit);
