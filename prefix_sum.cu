@@ -29,7 +29,9 @@ double get_time() {
 
 // --- Algorithms ---
 
-void prefix_sum_sequential(const int* input, int n, int* output) {
+size_t workspace_none(int n) { return 0; }
+
+void prefix_sum_sequential(const int* input, int n, int* output, void* workspace) {
 	if (n == 0) return;
 	output[0] = input[0];
 	for (int i = 1; i < n; i++) {
@@ -37,9 +39,11 @@ void prefix_sum_sequential(const int* input, int n, int* output) {
 	}
 }
 
-void prefix_sum_omp(const int* input, int n, int* output) {
+size_t workspace_omp(int n) { return (omp_get_max_threads() + 1) * sizeof(int); }
+
+void prefix_sum_omp(const int* input, int n, int* output, void* workspace) {
 	int n_threads = omp_get_max_threads();
-	int* offsets = (int*)malloc((n_threads + 1) * sizeof(int));
+	int* offsets = (int*)workspace; // Use provided workspace
 	offsets[0] = 0;
 
 	#pragma omp parallel
@@ -74,99 +78,130 @@ void prefix_sum_omp(const int* input, int n, int* output) {
 			for (int i = start; i < end; i++) output[i] += off;
 		}
 	}
-	free(offsets);
 }
 
-void prefix_sum_thrust(const int* d_input, int n, int* d_output) {
+void prefix_sum_thrust(const int* d_input, int n, int* d_out, void* workspace) {
 	thrust::device_ptr<const int> t_in(d_input);
-	thrust::device_ptr<int> t_out(d_output);
+	thrust::device_ptr<int> t_out(d_out);
 	thrust::inclusive_scan(t_in, t_in + n, t_out);
 }
 
 // --- Testing Framework ---
 
-typedef void (*ps_func)(const int*, int, int*);
+typedef void (*ps_func)(const int*, int, int*, void*);
+typedef size_t (*workspace_func)(int);
 
-void run_test(
-	const char* name, ps_func func, const int* input, int n, const int* ref, bool is_gpu
-) {
+typedef struct {
+	const char* name;
+	ps_func func;
+	workspace_func calc_workspace;
+	bool is_gpu;
+	int max_n; // max supported n by algorithm; -1 for no limit
+} ScanAlgorithm;
+
+void run_test(ScanAlgorithm algo, const int* input, int n, const int* ref) {
+	if (algo.max_n != -1 && n > algo.max_n) return; // Skip if N is too large
+
 	size_t bytes = n * sizeof(int);
+	size_t workspace_bytes = algo.calc_workspace(n);
+
 	int* output = (int*)malloc(bytes);
+	void* workspace = NULL;
 	double duration = 0.0;
 
-	if (is_gpu) {
+	if (algo.is_gpu) {
 		int *d_in, *d_out;
 		if (cudaMalloc(&d_in, bytes) != cudaSuccess || cudaMalloc(&d_out, bytes) != cudaSuccess) {
 			fprintf(stderr, "GPU Malloc Failed\n"); free(output); return;
 		}
+		if (workspace_bytes > 0 && cudaMalloc(&workspace, workspace_bytes) != cudaSuccess) {
+			fprintf(stderr, "GPU Workspace Malloc Failed\n");
+			free(output); cudaFree(d_in); cudaFree(d_out); return;
+		}
+
 		cudaMemcpy(d_in, input, bytes, cudaMemcpyHostToDevice);
-		cudaMemset(d_out, 0, bytes);
+		cudaMemset(d_out, 0, bytes); cudaMemset(workspace, 0, workspace_bytes);
 		cudaDeviceSynchronize();
 
 		// run once to "warm up" (GPU clocks, Driver Init, ...)
-		func(d_in, n, d_out);
-		cudaMemset(d_out, 0, bytes);
+		algo.func(d_in, n, d_out, workspace);
+		cudaMemset(d_out, 0, bytes); cudaMemset(workspace, 0, workspace_bytes);
 		cudaDeviceSynchronize();
 
 		double start = get_time();
-		func(d_in, n, d_out);
+		algo.func(d_in, n, d_out, workspace);
 		cudaDeviceSynchronize();
 		duration = get_time() - start;
 
 		cudaMemcpy(output, d_out, bytes, cudaMemcpyDeviceToHost);
 		cudaFree(d_in); cudaFree(d_out);
+		if (workspace) cudaFree(workspace);
 	} 
 	else {
-		memset(output, 0, bytes);
+		if (workspace_bytes > 0) workspace = malloc(workspace_bytes);
+		
+		memset(output, 0, bytes); memset(workspace, 0, workspace_bytes);
 
 		// run once to "warm up" (OS paging, clock speed, ...)
-		func(input, n, output);
-		memset(output, 0, bytes);
+		algo.func(input, n, output, workspace);
+		memset(output, 0, bytes); memset(workspace, 0, workspace_bytes);
 
 		double start = get_time();
-		func(input, n, output);
+		algo.func(input, n, output, workspace);
 		duration = get_time() - start;
+
+		if (workspace) free(workspace);
 	}
 
 	// Verification
 	bool valid = true;
 	for (int i = 0; i < n; i++) {
-		if (output[i] != ref[i]) valid = false;
+		if (output[i] != ref[i]) { valid = false; break; }
 	}
 
 	// Print info
-	printf("%-20s Time: %.5fs | Valid: %s\n", name, duration, valid ? "YES" : "NO");
-	// printf("\tInput:     "); print_array_sample(input, n, 16);
-	// printf("\tOutput:    "); print_array_sample(output, n, 16);
-	// printf("\tReference: "); print_array_sample(ref, n, 16);
+	printf("    %-20s Time: %.5fs | Valid: %s\n", algo.name, duration, valid ? "YES" : "NO");
+	if (!valid) {
+		printf("        Input:     "); print_array_sample(input, n, 16);
+		printf("        Output:    "); print_array_sample(output, n, 16);
+		printf("        Reference: "); print_array_sample(ref, n, 16);
+	}
 
 	free(output);
 }
 
-int main() {
-	const int n = 100000000; // above 500000000 may fail at GPU memory allocation
-	const int max_input_value = 3;
-
+void run_test_suite(const int n, const int max_input_value) {
 	assert((unsigned long long)n * max_input_value < INT_MAX); // ensure it can't overflow
 	size_t bytes = n * sizeof(int);
 
-	printf("Initializing %d elements (%.2f MiB)...\n", n, bytes / (1024.0 * 1024.0));
-
+	printf("Running with %d elements (%.2f MiB)...\n", n, bytes / (1024.0 * 1024.0));
 	int* input = (int*)malloc(bytes);
 	int* ref = (int*)malloc(bytes);
 
-	// Initialize input data
 	for (int i = 0; i < n; i++) { input[i] = rand() % (max_input_value+1); }
-	// Prepare reference data (use sequential sum as source of truth)
-	prefix_sum_sequential(input, n, ref);
+	prefix_sum_sequential(input, n, ref, NULL);
 
-	bool is_gpu = false;
-	run_test("CPU Sequential", prefix_sum_sequential, input, n, ref, is_gpu);
-	run_test("CPU Multi-threaded", prefix_sum_omp, input, n, ref, is_gpu);
-	is_gpu = true;
-	run_test("GPU Thrust library", prefix_sum_thrust, input, n, ref, is_gpu);
+	ScanAlgorithm algorithms[] = {
+		{ "CPU Sequential",      prefix_sum_sequential, workspace_none, false, -1 },
+		{ "CPU Multi-threaded",  prefix_sum_omp,        workspace_omp,  false, -1 },
+		{ "GPU Thrust library",  prefix_sum_thrust,     workspace_none, true,  -1 },
+		// Add PMPP algorithms here (e.g., Kogge-Stone with max_n = 1024)
+	};
+
+	int num_algos = sizeof(algorithms) / sizeof(ScanAlgorithm);
+	for (int i = 0; i < num_algos; i++) {
+		run_test(algorithms[i], input, n, ref);
+	}
 
 	free(input); free(ref);
+}
+
+int main() {
+	// Small Case (Single Block algorithms will also run here)
+	run_test_suite(1024, 100);
+
+	run_test_suite(10000000, 50);
+	run_test_suite(500000000, 2);
 
 	return 0;
 }
