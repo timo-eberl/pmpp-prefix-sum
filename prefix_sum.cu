@@ -103,6 +103,11 @@ void run_test(
 		cudaMemset(d_out, 0, bytes);
 		cudaDeviceSynchronize();
 
+		// run once to "warm up" (GPU clocks, Driver Init, ...)
+		func(d_in, n, d_out);
+		cudaMemset(d_out, 0, bytes);
+		cudaDeviceSynchronize();
+
 		double start = get_time();
 		func(d_in, n, d_out);
 		cudaDeviceSynchronize();
@@ -112,6 +117,10 @@ void run_test(
 		cudaFree(d_in); cudaFree(d_out);
 	} 
 	else {
+		memset(output, 0, bytes);
+
+		// run once to "warm up" (OS paging, clock speed, ...)
+		func(input, n, output);
 		memset(output, 0, bytes);
 
 		double start = get_time();
@@ -127,9 +136,9 @@ void run_test(
 
 	// Print info
 	printf("%-20s Time: %.5fs | Valid: %s\n", name, duration, valid ? "YES" : "NO");
-	printf("\tInput:     "); print_array_sample(input, n, 16);
-	printf("\tOutput:    "); print_array_sample(output, n, 16);
-	printf("\tReference: "); print_array_sample(ref, n, 16);
+	// printf("\tInput:     "); print_array_sample(input, n, 16);
+	// printf("\tOutput:    "); print_array_sample(output, n, 16);
+	// printf("\tReference: "); print_array_sample(ref, n, 16);
 
 	free(output);
 }
