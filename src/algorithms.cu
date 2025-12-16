@@ -132,3 +132,41 @@ void scan_kogge_stone(const int* d_input, int n, int* d_out, void* workspace) {
 	assert(n <= BLOCK_SIZE);
 	kogge_stone_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n);
 }
+
+__global__ void brent_kung_kernel(const int* d_in, int* d_out, int n) {
+	__shared__ int temp[BLOCK_SIZE];
+	int i = threadIdx.x;
+
+	// Load input into shared memory
+	if (i < n) temp[i] = d_in[i];
+	else temp[i] = 0;
+
+	// Phase 1: Reduction Tree (Up-Sweep)
+	for (int stride = 1; stride <= blockDim.x; stride *= 2) {
+		__syncthreads();
+		// Calculate the index of the element to update
+		int index = (i + 1) * 2 * stride - 1;
+		if (index < blockDim.x) {
+			temp[index] += temp[index - stride];
+		}
+	}
+
+	// Phase 2: Reverse Tree (Down-Sweep)
+	for (int stride = blockDim.x / 4; stride > 0; stride /= 2) {
+		__syncthreads();
+		int index = (i + 1) * 2 * stride - 1;
+		if (index + stride < blockDim.x) {
+			temp[index + stride] += temp[index];
+		}
+	}
+
+	__syncthreads(); // Ensure all shared memory writes are done
+
+	// Write result to global memory
+	if (i < n) d_out[i] = temp[i];
+}
+
+void scan_brent_kung(const int* d_input, int n, int* d_out, void* workspace) {
+	assert(n <= BLOCK_SIZE);
+	brent_kung_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n);
+}

@@ -110,6 +110,7 @@ void run_test_suite(const int n, const int max_input_value) {
 		{ "CPU Multi-threaded",  scan_omp,         workspace_omp,  false, -1   },
 		{ "GPU Thrust library",  scan_thrust,      workspace_none, true,  -1   },
 		{ "GPU Kogge-Stone",     scan_kogge_stone, workspace_none, true,  1024 },
+		{ "GPU Brent-Kung",      scan_brent_kung,  workspace_none, true,  1024 },
 	};
 
 	int num_algos = sizeof(algorithms) / sizeof(ScanAlgorithm);
