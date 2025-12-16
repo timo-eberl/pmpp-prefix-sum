@@ -71,6 +71,37 @@ void scan_thrust(const int* d_input, int n, int* d_out, void* workspace) {
 	thrust::inclusive_scan(t_in, t_in + n, t_out);
 }
 
+__global__ void kogge_stone_double_buffered_kernel(const int* d_in, int* d_out, int n) {
+	__shared__ int buf_A[1024]; __shared__ int buf_B[1024]; // allocate 2 buffers
+	// convert to pointers so we can do pointer arithmetic
+	int* temp_in = buf_A;
+	int* temp_out = buf_B;
+
+	int i = threadIdx.x;
+
+	// Load input into the first buffer
+	if (i < n) temp_in[i] = d_in[i];
+	else temp_in[i] = 0;
+
+	for (int stride = 1; stride < blockDim.x; stride *= 2) {
+		__syncthreads(); // write-after-read protection: ensure all threads finished writing
+
+		if (i >= stride) {
+			temp_out[i] = temp_in[i] + temp_in[i - stride];
+		} else {
+			// In double buffering, we must copy the value forward even if 
+			// no addition happens, so it exists in the buffer for the next step
+			temp_out[i] = temp_in[i];
+		}
+
+		// Swap pointers: Output of this step becomes input of the next
+		int* t = temp_in; temp_in = temp_out; temp_out = t;
+	}
+
+	// Write result to global memory, temp_in always holds the most recent result
+	if (i < n) d_out[i] = temp_in[i];
+}
+
 __global__ void kogge_stone_kernel(const int* d_in, int* d_out, int n) {
 	__shared__ int temp[BLOCK_SIZE];
 	int i = threadIdx.x;
