@@ -102,12 +102,12 @@ void run_test_suite(const int n, const int max_input_value) {
 	int* ref = (int*)malloc(bytes);
 
 	for (int i = 0; i < n; i++) { input[i] = rand() % (max_input_value+1); }
-	prefix_sum_sequential(input, n, ref, NULL); // Get reference data from sequential algorithm
+	scan_sequential(input, n, ref, NULL); // Get reference data from sequential algorithm
 
 	ScanAlgorithm algorithms[] = {
-		{ "CPU Sequential",      prefix_sum_sequential, workspace_none, false, -1 },
-		{ "CPU Multi-threaded",  prefix_sum_omp,        workspace_omp,  false, -1 },
-		{ "GPU Thrust library",  prefix_sum_thrust,     workspace_none, true,  -1 },
+		{ "CPU Sequential",      scan_sequential, workspace_none, false, -1 },
+		{ "CPU Multi-threaded",  scan_omp,        workspace_omp,  false, -1 },
+		{ "GPU Thrust library",  scan_thrust,     workspace_none, true,  -1 },
 	};
 
 	int num_algos = sizeof(algorithms) / sizeof(ScanAlgorithm);

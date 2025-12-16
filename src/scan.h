@@ -21,10 +21,10 @@ typedef struct {
 // CPU
 size_t workspace_none(int n);
 size_t workspace_omp(int n);
-void prefix_sum_sequential(const int* input, int n, int* output, void* workspace);
-void prefix_sum_omp(const int* input, int n, int* output, void* workspace);
+void scan_sequential(const int* input, int n, int* output, void* workspace);
+void scan_omp(const int* input, int n, int* output, void* workspace);
 // GPU
-void prefix_sum_thrust(const int* d_input, int n, int* d_out, void* workspace);
+void scan_thrust(const int* d_input, int n, int* d_out, void* workspace);
 
 // Helpers
 void print_array_sample(const int* arr, int n, int limit);

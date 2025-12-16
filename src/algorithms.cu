@@ -5,7 +5,7 @@
 
 size_t workspace_none(int n) { return 0; }
 
-void prefix_sum_sequential(const int* input, int n, int* output, void* workspace) {
+void scan_sequential(const int* input, int n, int* output, void* workspace) {
 	if (n == 0) return;
 	output[0] = input[0];
 	for (int i = 1; i < n; i++) {
@@ -17,7 +17,7 @@ size_t workspace_omp(int n) {
 	return (omp_get_max_threads() + 1) * sizeof(int); 
 }
 
-void prefix_sum_omp(const int* input, int n, int* output, void* workspace) {
+void scan_omp(const int* input, int n, int* output, void* workspace) {
 	int n_threads = omp_get_max_threads();
 	int* offsets = (int*)workspace; // Use provided workspace
 	offsets[0] = 0;
@@ -56,7 +56,7 @@ void prefix_sum_omp(const int* input, int n, int* output, void* workspace) {
 	}
 }
 
-void prefix_sum_thrust(const int* d_input, int n, int* d_out, void* workspace) {
+void scan_thrust(const int* d_input, int n, int* d_out, void* workspace) {
 	thrust::device_ptr<const int> t_in(d_input);
 	thrust::device_ptr<int> t_out(d_out);
 	thrust::inclusive_scan(t_in, t_in + n, t_out);
