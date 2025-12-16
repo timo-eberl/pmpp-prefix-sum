@@ -94,7 +94,7 @@ void run_test(ScanAlgorithm algo, const int* input, int n, const int* ref) {
 }
 
 void run_test_suite(const int n, const int max_input_value) {
-	assert((unsigned long long)n * max_input_value < INT_MAX);
+	assert((unsigned long long)n * max_input_value < INT_MAX); // ensure result can't overflow
 	size_t bytes = n * sizeof(int);
 
 	printf("Running with %d elements (%.2f MiB)...\n", n, bytes / (1024.0 * 1024.0));
