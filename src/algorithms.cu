@@ -2,6 +2,7 @@
 #include <omp.h>
 #include <thrust/scan.h>
 #include <thrust/device_ptr.h>
+#include <numeric>
 
 size_t workspace_none(int n) { return 0; }
 
@@ -11,6 +12,11 @@ void scan_sequential(const int* input, int n, int* output, void* workspace) {
 	for (int i = 1; i < n; i++) {
 		output[i] = output[i - 1] + input[i];
 	}
+}
+
+void scan_std(const int* input, int n, int* output, void* workspace) {
+	// C++17 standard inclusive scan
+	std::inclusive_scan(input, input + n, output);
 }
 
 size_t workspace_omp(int n) { 

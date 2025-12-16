@@ -22,6 +22,7 @@ typedef struct {
 size_t workspace_none(int n);
 size_t workspace_omp(int n);
 void scan_sequential(const int* input, int n, int* output, void* workspace);
+void scan_std(const int* input, int n, int* output, void* workspace);
 void scan_omp(const int* input, int n, int* output, void* workspace);
 // GPU
 void scan_thrust(const int* d_input, int n, int* d_out, void* workspace);

@@ -106,6 +106,7 @@ void run_test_suite(const int n, const int max_input_value) {
 
 	ScanAlgorithm algorithms[] = {
 		{ "CPU Sequential",      scan_sequential, workspace_none, false, -1 },
+		{ "CPU C++ Std library", scan_std,        workspace_none, false, -1 },
 		{ "CPU Multi-threaded",  scan_omp,        workspace_omp,  false, -1 },
 		{ "GPU Thrust library",  scan_thrust,     workspace_none, true,  -1 },
 	};
