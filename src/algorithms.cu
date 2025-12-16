@@ -4,6 +4,9 @@
 #include <thrust/device_ptr.h>
 #include <numeric>
 
+// block size maximum of my GPU is 1024 threads
+#define BLOCK_SIZE 1024
+
 size_t workspace_none(int n) { return 0; }
 
 void scan_sequential(const int* input, int n, int* output, void* workspace) {
@@ -66,4 +69,35 @@ void scan_thrust(const int* d_input, int n, int* d_out, void* workspace) {
 	thrust::device_ptr<const int> t_in(d_input);
 	thrust::device_ptr<int> t_out(d_out);
 	thrust::inclusive_scan(t_in, t_in + n, t_out);
+}
+
+__global__ void kogge_stone_kernel(const int* d_in, int* d_out, int n) {
+	__shared__ int temp[BLOCK_SIZE];
+	int i = threadIdx.x;
+
+	// Load input into shared memory
+	if (i < n) temp[i] = d_in[i];
+	else temp[i] = 0;
+
+	// We use a register 'v' to handle the read-after-write dependency
+	for (int stride = 1; stride < blockDim.x; stride *= 2) {
+		__syncthreads(); // write-after-read protection: ensure all threads finished writing
+		int v = 0;
+		if (i >= stride) {
+			v = temp[i] + temp[i - stride];
+		}
+
+		__syncthreads(); // read-after-write protection: ensure all threads finished reading
+		if (i >= stride) {
+			temp[i] = v;
+		}
+	}
+
+	// Write result to global memory
+	if (i < n) d_out[i] = temp[i];
+}
+
+void scan_kogge_stone(const int* d_input, int n, int* d_out, void* workspace) {
+	assert(n <= BLOCK_SIZE);
+	kogge_stone_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n);
 }

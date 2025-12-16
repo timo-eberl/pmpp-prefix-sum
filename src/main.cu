@@ -83,7 +83,7 @@ void run_test(ScanAlgorithm algo, const int* input, int n, const int* ref) {
 		if (output[i] != ref[i]) { valid = false; break; }
 	}
 
-	printf("    %-20s Time: %.5fs | Valid: %s\n", algo.name, duration, valid ? "YES" : "NO");
+	printf("    %-20s Time: %.6fs | Valid: %s\n", algo.name, duration, valid ? "YES" : "NO");
 	if (!valid) {
 		printf("        Input:     "); print_array_sample(input, n, 16);
 		printf("        Output:    "); print_array_sample(output, n, 16);
@@ -105,10 +105,11 @@ void run_test_suite(const int n, const int max_input_value) {
 	scan_sequential(input, n, ref, NULL); // Get reference data from sequential algorithm
 
 	ScanAlgorithm algorithms[] = {
-		{ "CPU Sequential",      scan_sequential, workspace_none, false, -1 },
-		{ "CPU C++ Std library", scan_std,        workspace_none, false, -1 },
-		{ "CPU Multi-threaded",  scan_omp,        workspace_omp,  false, -1 },
-		{ "GPU Thrust library",  scan_thrust,     workspace_none, true,  -1 },
+		{ "CPU Sequential",      scan_sequential,  workspace_none, false, -1   },
+		{ "CPU C++ Std library", scan_std,         workspace_none, false, -1   },
+		{ "CPU Multi-threaded",  scan_omp,         workspace_omp,  false, -1   },
+		{ "GPU Thrust library",  scan_thrust,      workspace_none, true,  -1   },
+		{ "GPU Kogge-Stone",     scan_kogge_stone, workspace_none, true,  1024 },
 	};
 
 	int num_algos = sizeof(algorithms) / sizeof(ScanAlgorithm);
@@ -121,6 +122,7 @@ void run_test_suite(const int n, const int max_input_value) {
 
 int main() {
 	run_test_suite(1024, 100); // small Case (Single Block algorithms will also run here)
+	run_test_suite(2000000, 100);
 	run_test_suite(10000000, 50);
 	run_test_suite(500000000, 2);
 
