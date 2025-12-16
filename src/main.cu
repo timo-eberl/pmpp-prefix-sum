@@ -110,7 +110,7 @@ void run_test_suite(const int n, const int max_input_value) {
 		{ "CPU Multi-threaded",  scan_omp,         workspace_omp,  false, -1   },
 		{ "GPU Thrust library",  scan_thrust,      workspace_none, true,  -1   },
 		{ "GPU Kogge-Stone",     scan_kogge_stone, workspace_none, true,  1024 },
-		{ "GPU Brent-Kung",      scan_brent_kung,  workspace_none, true,  1024 },
+		{ "GPU Brent-Kung",      scan_brent_kung,  workspace_none, true,  2048 },
 	};
 
 	int num_algos = sizeof(algorithms) / sizeof(ScanAlgorithm);
@@ -122,7 +122,8 @@ void run_test_suite(const int n, const int max_input_value) {
 }
 
 int main() {
-	run_test_suite(1024, 100); // small Case (Single Block algorithms will also run here)
+	run_test_suite(1024, 100); // small case (some algorithms will only run here)
+	run_test_suite(2048, 100); // small case (some algorithms will only run here)
 	run_test_suite(2000000, 100);
 	run_test_suite(10000000, 50);
 	run_test_suite(500000000, 2);
