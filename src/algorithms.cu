@@ -6,8 +6,8 @@
 
 // block size maximum of my GPU is 1024 threads
 #define BLOCK_SIZE 1024
-// shared memory maximum: 49152 bytes -> coarse factor up to 11
-#define COARSE_FACTOR 11
+// shared memory maximum: 49152 bytes -> coarse factor up to 12
+#define COARSE_FACTOR 12
 
 size_t workspace_none(int n) { return 0; }
 
@@ -183,8 +183,6 @@ void scan_brent_kung(const int* d_input, int n, int* d_out, void* workspace) {
 // Coarsened kernel to process larger inputs with fewer threads
 __global__ void coarsened_scan_kernel(const int* d_in, int* d_out, int n) {
 	__shared__ int temp[BLOCK_SIZE * COARSE_FACTOR];
-	// Array to store aggregate sums for each thread
-	__shared__ int block_sums[BLOCK_SIZE];
 
 	int tid = threadIdx.x;
 
@@ -203,31 +201,27 @@ __global__ void coarsened_scan_kernel(const int* d_in, int* d_out, int n) {
 		temp[start_idx + i] += temp[start_idx + i - 1];
 	}
 
-	// The last element of the chunk is the total sum for this thread
-	// Put this into separate shared memory buffer (differs from book)
-	block_sums[tid] = temp[start_idx + COARSE_FACTOR - 1];
 	__syncthreads();
 
-	// Phase 2: Kogge-Stone Parallel Scan on Block Sums
-	// This scans the aggregates so block_sums[i] becomes the prefix sum of all chunks 0..i
+	// Phase 2: Kogge-Stone Parallel Scan on the end of each chunk
 	for (int stride = 1; stride < BLOCK_SIZE; stride *= 2) {
 		int v = 0;
 		if (tid >= stride) {
-			v = block_sums[tid - stride];
+			v = temp[(tid - stride + 1) * COARSE_FACTOR - 1];
 		}
 		__syncthreads();
 		if (tid >= stride) {
-			block_sums[tid] += v;
+			temp[(tid + 1) * COARSE_FACTOR - 1] += v;
 		}
 		__syncthreads();
 	}
 
 	// Phase 3: Distribute Block Sums to Local Chunks
-	// Add the scanned sum of the previous thread to the current threads chunk
-	// Thread 0 has no previous sum to add
-	int prev_sum = (tid == 0) ? 0 : block_sums[tid - 1];
-	for (int i = 0; i < COARSE_FACTOR; ++i) {
-		temp[start_idx + i] += prev_sum;
+	if (tid > 0) {
+		int prev_sum = temp[tid * COARSE_FACTOR - 1];
+		for (int i = 0; i < COARSE_FACTOR - 1; ++i) {
+			temp[start_idx + i] += prev_sum;
+		}
 	}
 	__syncthreads();
 
@@ -251,12 +245,9 @@ size_t workspace_segmented(int n) {
 }
 
 // Segmented Scan Kernel 1: Block-wise Coarsened Scan
-// Identical to coarsened_scan_kernel but includes block offset logic
-// and writes the total sum of the block to the aux array.
 __global__ void segmented_scan_block_kernel(const int* d_in, int* d_out, int* d_aux, int n) {
 	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR;
 	__shared__ int temp[SECTION_SIZE];
-	__shared__ int block_sums[BLOCK_SIZE];
 
 	int tid = threadIdx.x;
 	int block_offset = blockIdx.x * SECTION_SIZE;
@@ -265,11 +256,8 @@ __global__ void segmented_scan_block_kernel(const int* d_in, int* d_out, int* d_
 	for (int i = 0; i < COARSE_FACTOR; ++i) {
 		int local_idx = tid + i * BLOCK_SIZE;
 		int global_idx = block_offset + local_idx;
-		if (global_idx < n) {
-			temp[local_idx] = d_in[global_idx];
-		} else {
-			temp[local_idx] = 0;
-		}
+		if (global_idx < n) temp[local_idx] = d_in[global_idx];
+		else temp[local_idx] = 0;
 	}
 	__syncthreads();
 
@@ -278,26 +266,27 @@ __global__ void segmented_scan_block_kernel(const int* d_in, int* d_out, int* d_
 	for (int i = 1; i < COARSE_FACTOR; ++i) {
 		temp[start_idx + i] += temp[start_idx + i - 1];
 	}
-	block_sums[tid] = temp[start_idx + COARSE_FACTOR - 1];
 	__syncthreads();
 
-	// Parallel Scan on Block Sums (Kogge-Stone)
+	// Parallel Scan on Chunk Ends
 	for (int stride = 1; stride < BLOCK_SIZE; stride *= 2) {
 		int v = 0;
 		if (tid >= stride) {
-			v = block_sums[tid - stride];
+			v = temp[(tid - stride + 1) * COARSE_FACTOR - 1];
 		}
 		__syncthreads();
 		if (tid >= stride) {
-			block_sums[tid] += v;
+			temp[(tid + 1) * COARSE_FACTOR - 1] += v;
 		}
 		__syncthreads();
 	}
 
 	// Distribute Block Sums to Local Chunks
-	int prev_sum = (tid == 0) ? 0 : block_sums[tid - 1];
-	for (int i = 0; i < COARSE_FACTOR; ++i) {
-		temp[start_idx + i] += prev_sum;
+	if (tid > 0) {
+		int prev_sum = temp[tid * COARSE_FACTOR - 1];
+		for (int i = 0; i < COARSE_FACTOR - 1; ++i) {
+			temp[start_idx + i] += prev_sum;
+		}
 	}
 	__syncthreads();
 
@@ -305,9 +294,7 @@ __global__ void segmented_scan_block_kernel(const int* d_in, int* d_out, int* d_
 	for (int i = 0; i < COARSE_FACTOR; ++i) {
 		int local_idx = tid + i * BLOCK_SIZE;
 		int global_idx = block_offset + local_idx;
-		if (global_idx < n) {
-			d_out[global_idx] = temp[local_idx];
-		}
+		if (global_idx < n) d_out[global_idx] = temp[local_idx];
 	}
 
 	// Write Total Block Sum to Auxiliary Array (last thread)
@@ -317,10 +304,8 @@ __global__ void segmented_scan_block_kernel(const int* d_in, int* d_out, int* d_
 }
 
 // Segmented Scan Kernel 3: Add Offsets Kernel
-// Adds the scanned auxiliary value (previous blocks total) to the current block elements
 __global__ void add_block_sums_kernel(int* d_out, const int* d_aux, int n) {
 	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR;
-	// If this is the first block, it needs no offset
 	if (blockIdx.x == 0) return;
 
 	int offset = d_aux[blockIdx.x - 1];
@@ -337,17 +322,16 @@ __global__ void add_block_sums_kernel(int* d_out, const int* d_aux, int n) {
 
 void scan_segmented(const int* d_input, int n, int* d_out, void* workspace) {
 	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR;
-	// Number of blocks required to cover N elements
 	int num_blocks = (n + SECTION_SIZE - 1) / SECTION_SIZE;
 	assert(num_blocks <= SECTION_SIZE);
-	assert(n <= SECTION_SIZE*SECTION_SIZE);
+	assert(n <= SECTION_SIZE*SECTION_SIZE); // essentially the same
 
 	int* d_aux = (int*)workspace;
 
 	// Step 1: Perform Local Scans and generate Block Sums
 	segmented_scan_block_kernel<<<num_blocks, BLOCK_SIZE>>>(d_input, d_out, d_aux, n);
 
-	if (num_blocks < 2) { return; } // exit early
+	if (num_blocks < 2) return; // exit early
 
 	// Step 2: Perform Scan on Block Sums
 	// We use the existing single-block coarsened kernel.
