@@ -28,6 +28,7 @@ void scan_omp(const int* input, int n, int* output, void* workspace);
 void scan_thrust(const int* d_input, int n, int* d_out, void* workspace);
 void scan_kogge_stone(const int* d_input, int n, int* d_out, void* workspace);
 void scan_brent_kung(const int* d_input, int n, int* d_out, void* workspace);
+void scan_coarsened(const int* d_input, int n, int* d_out, void* workspace);
 
 // Helpers
 void print_array_sample(const int* arr, int n, int limit);
