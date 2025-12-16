@@ -104,35 +104,41 @@ __global__ void kogge_stone_double_buffered_kernel(const int* d_in, int* d_out, 
 	if (i < n) d_out[i] = temp_in[i];
 }
 
-__global__ void kogge_stone_kernel(const int* d_in, int* d_out, int n) {
+__global__ void kogge_stone_kernel(const int* d_in, int* d_out, int n, int* d_aux) {
 	__shared__ int temp[BLOCK_SIZE];
-	int i = threadIdx.x;
+	int tid = threadIdx.x;
+	int i = blockIdx.x * blockDim.x + tid;
 
 	// Load input into shared memory
-	if (i < n) temp[i] = d_in[i];
-	else temp[i] = 0;
+	if (i < n) temp[tid] = d_in[i];
+	else temp[tid] = 0;
 
 	// We use a register v to handle the read-after-write dependency
 	for (int stride = 1; stride < blockDim.x; stride *= 2) {
 		__syncthreads(); // write-after-read protection: ensure all threads finished writing
 		int v = 0;
-		if (i >= stride) {
-			v = temp[i] + temp[i - stride];
+		if (tid >= stride) {
+			v = temp[tid] + temp[tid - stride];
 		}
 
 		__syncthreads(); // read-after-write protection: ensure all threads finished reading
-		if (i >= stride) {
-			temp[i] = v;
+		if (tid >= stride) {
+			temp[tid] = v;
 		}
 	}
 
 	// Write result to global memory
-	if (i < n) d_out[i] = temp[i];
+	if (i < n) d_out[i] = temp[tid];
+
+	// Write block sum to auxiliary array (last thread has the total)
+	if (d_aux != nullptr && tid == BLOCK_SIZE - 1) {
+		d_aux[blockIdx.x] = temp[BLOCK_SIZE - 1];
+	}
 }
 
 void scan_kogge_stone(const int* d_input, int n, int* d_out, void* workspace) {
 	assert(n <= BLOCK_SIZE);
-	kogge_stone_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n);
+	kogge_stone_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n, nullptr);
 }
 
 __global__ void brent_kung_kernel(const int* d_in, int* d_out, int n, int* d_aux) {
@@ -327,6 +333,34 @@ void scan_segm_brent_kung(const int* d_input, int n, int* d_out, void* workspace
 
 	// Step 2: Perform Scan on Block Sums
 	brent_kung_kernel<<<1, BLOCK_SIZE>>>(d_aux, d_aux, num_blocks, nullptr);
+
+	// Step 3: Add scanned block sums to the result
+	add_block_sums_kernel<<<num_blocks, BLOCK_SIZE>>>(d_out, d_aux, n, SECTION_SIZE);
+}
+
+size_t workspace_segm_kogge_stone(int n) {
+	const int SECTION_SIZE = BLOCK_SIZE;
+	int num_blocks = (n + SECTION_SIZE - 1) / SECTION_SIZE;
+	return num_blocks * sizeof(int);
+}
+
+void scan_segm_kogge_stone(const int* d_input, int n, int* d_out, void* workspace) {
+	// Kogge-Stone processes 1 * BLOCK_SIZE element per block
+	const int SECTION_SIZE = BLOCK_SIZE;
+	int num_blocks = (n + SECTION_SIZE - 1) / SECTION_SIZE;
+
+	assert(num_blocks <= SECTION_SIZE);
+	assert(n <= SECTION_SIZE*SECTION_SIZE);
+
+	int* d_aux = (int*)workspace;
+
+	// Step 1: Perform Local Scans and generate Block Sums
+	kogge_stone_kernel<<<num_blocks, BLOCK_SIZE>>>(d_input, d_out, n, d_aux);
+
+	if (num_blocks < 2) return; // exit early
+
+	// Step 2: Perform Scan on Block Sums
+	kogge_stone_kernel<<<1, BLOCK_SIZE>>>(d_aux, d_aux, num_blocks, nullptr);
 
 	// Step 3: Add scanned block sums to the result
 	add_block_sums_kernel<<<num_blocks, BLOCK_SIZE>>>(d_out, d_aux, n, SECTION_SIZE);

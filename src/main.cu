@@ -83,7 +83,7 @@ void run_test(ScanAlgorithm algo, const int* input, int n, const int* ref) {
 		if (output[i] != ref[i]) { valid = false; break; }
 	}
 
-	printf("    %-20s Time: %.6fs | Valid: %s\n", algo.name, duration, valid ? "YES" : "NO");
+	printf("    %-21s Time: %.6fs | Valid: %s\n", algo.name, duration, valid ? "YES" : "NO");
 	if (!valid) {
 		printf("        Input:     "); print_array_sample(input, n, 16);
 		printf("        Output:    "); print_array_sample(output, n, 16);
@@ -105,15 +105,16 @@ void run_test_suite(const int n, const int max_input_value) {
 	scan_sequential(input, n, ref, NULL); // Get reference data from sequential algorithm
 
 	ScanAlgorithm algorithms[] = {
-		{ "CPU Sequential",      scan_sequential,     workspace_none,           false,-1        },
-		{ "CPU C++ Std library", scan_std,            workspace_none,           false,-1        },
-		{ "CPU Multi-threaded",  scan_omp,            workspace_omp,            false,-1        },
-		{ "GPU Thrust library",  scan_thrust,         workspace_none,           true, -1        },
-		{ "GPU Kogge-Stone",     scan_kogge_stone,    workspace_none,           true, 1024      },
-		{ "GPU Brent-Kung",      scan_brent_kung,     workspace_none,           true, 2048      },
-		{ "GPU Coarsened",       scan_coarsened,      workspace_none,           true, 12288     },
-		{ "GPU Segm. Brent-Kung",scan_segm_brent_kung,workspace_segm_brent_kung,true, 4194304   },
-		{ "GPU Segm. Coarse",    scan_segm_coarse,    workspace_segm_coarse,    true, 150994944 },
+		{"CPU Sequential",       scan_sequential,      workspace_none,            false,-1       },
+		{"CPU C++ Std library",  scan_std,             workspace_none,            false,-1       },
+		{"CPU Multi-threaded",   scan_omp,             workspace_omp,             false,-1       },
+		{"GPU Thrust library",   scan_thrust,          workspace_none,            true, -1       },
+		{"GPU Kogge-Stone",      scan_kogge_stone,     workspace_none,            true, 1024     },
+		{"GPU Brent-Kung",       scan_brent_kung,      workspace_none,            true, 2048     },
+		{"GPU Coarsened",        scan_coarsened,       workspace_none,            true, 12288    },
+		{"GPU Segm. Kogge-Stone",scan_segm_kogge_stone,workspace_segm_kogge_stone,true, 1048576  },
+		{"GPU Segm. Brent-Kung", scan_segm_brent_kung, workspace_segm_brent_kung, true, 4194304  },
+		{"GPU Segm. Coarse",     scan_segm_coarse,     workspace_segm_coarse,     true, 150994944},
 	};
 
 	int num_algos = sizeof(algorithms) / sizeof(ScanAlgorithm);
@@ -130,10 +131,11 @@ int main() {
 	// run_test_suite(2048, 100);
 	// run_test_suite(12288, 100);
 	// run_test_suite(2000000, 2); // omp is sometimes faster
+	run_test_suite(1048576, 2);
 	run_test_suite(4194304, 2);
-	run_test_suite(10000000, 2);
+	// run_test_suite(10000000, 2);
 	run_test_suite(150994944, 2); // segmented limit
-	run_test_suite(500000000, 2);
+	// run_test_suite(500000000, 2);
 
 	return 0;
 }

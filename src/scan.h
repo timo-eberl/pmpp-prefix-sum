@@ -33,6 +33,8 @@ size_t workspace_segm_coarse(int n);
 void scan_segm_coarse(const int* d_input, int n, int* d_out, void* workspace);
 size_t workspace_segm_brent_kung(int n);
 void scan_segm_brent_kung(const int* d_input, int n, int* d_out, void* workspace);
+size_t workspace_segm_kogge_stone(int n);
+void scan_segm_kogge_stone(const int* d_input, int n, int* d_out, void* workspace);
 
 // Helpers
 void print_array_sample(const int* arr, int n, int limit);
