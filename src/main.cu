@@ -105,13 +105,14 @@ void run_test_suite(const int n, const int max_input_value) {
 	scan_sequential(input, n, ref, NULL); // Get reference data from sequential algorithm
 
 	ScanAlgorithm algorithms[] = {
-		{ "CPU Sequential",      scan_sequential,  workspace_none, false, -1    },
-		{ "CPU C++ Std library", scan_std,         workspace_none, false, -1    },
-		{ "CPU Multi-threaded",  scan_omp,         workspace_omp,  false, -1    },
-		{ "GPU Thrust library",  scan_thrust,      workspace_none, true,  -1    },
-		{ "GPU Kogge-Stone",     scan_kogge_stone, workspace_none, true,  1024  },
-		{ "GPU Brent-Kung",      scan_brent_kung,  workspace_none, true,  2048  },
-		{ "GPU Coarsened",       scan_coarsened,   workspace_none, true,  11264 },
+		{ "CPU Sequential",      scan_sequential,  workspace_none,      false, -1    },
+		{ "CPU C++ Std library", scan_std,         workspace_none,      false, -1    },
+		{ "CPU Multi-threaded",  scan_omp,         workspace_omp,       false, -1    },
+		{ "GPU Thrust library",  scan_thrust,      workspace_none,      true,  -1    },
+		{ "GPU Kogge-Stone",     scan_kogge_stone, workspace_none,      true,  1024  },
+		{ "GPU Brent-Kung",      scan_brent_kung,  workspace_none,      true,  2048  },
+		{ "GPU Coarsened",       scan_coarsened,   workspace_none,      true,  11264 },
+		{ "GPU Segmented",       scan_segmented,   workspace_segmented, true,  126877696 },
 	};
 
 	int num_algos = sizeof(algorithms) / sizeof(ScanAlgorithm);
@@ -123,11 +124,13 @@ void run_test_suite(const int n, const int max_input_value) {
 }
 
 int main() {
-	run_test_suite(1024, 100); // small case (some algorithms will only run here)
-	run_test_suite(2048, 100); // small case (some algorithms will only run here)
-	run_test_suite(11264, 100); // small case (some algorithms will only run here)
-	run_test_suite(2000000, 100);
-	run_test_suite(10000000, 50);
+	// some algorithms will only run up to specific sizes
+	run_test_suite(1024, 100);
+	run_test_suite(2048, 100);
+	run_test_suite(11264, 100);
+	run_test_suite(2000000, 2); // omp is sometimes faster
+	run_test_suite(10000000, 2);
+	run_test_suite(126877696, 2); // segmented limit
 	run_test_suite(500000000, 2);
 
 	return 0;
