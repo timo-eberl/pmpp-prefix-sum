@@ -73,27 +73,28 @@ void scan_thrust(const int* d_input, int n, int* d_out, void* workspace) {
 	thrust::inclusive_scan(t_in, t_in + n, t_out);
 }
 
-__global__ void kogge_stone_double_buffered_kernel(const int* d_in, int* d_out, int n) {
-	__shared__ int buf_A[1024]; __shared__ int buf_B[1024]; // allocate 2 buffers
+__global__ void kogge_stone_double_buffered_kernel(const int* d_in, int* d_out, int n, int* d_aux) {
+	__shared__ int buf_A[BLOCK_SIZE]; __shared__ int buf_B[BLOCK_SIZE]; // allocate 2 buffers
 	// convert to pointers so we can do pointer arithmetic
 	int* temp_in = buf_A;
 	int* temp_out = buf_B;
 
-	int i = threadIdx.x;
+	int tid = threadIdx.x;
+	int global_idx = blockIdx.x * blockDim.x + tid;
 
 	// Load input into the first buffer
-	if (i < n) temp_in[i] = d_in[i];
-	else temp_in[i] = 0;
+	if (global_idx < n) temp_in[tid] = d_in[global_idx];
+	else temp_in[tid] = 0;
 
 	for (int stride = 1; stride < blockDim.x; stride *= 2) {
 		__syncthreads(); // write-after-read protection: ensure all threads finished writing
 
-		if (i >= stride) {
-			temp_out[i] = temp_in[i] + temp_in[i - stride];
+		if (tid >= stride) {
+			temp_out[tid] = temp_in[tid] + temp_in[tid - stride];
 		} else {
 			// In double buffering, we must copy the value forward even if 
 			// no addition happens, so it exists in the buffer for the next step
-			temp_out[i] = temp_in[i];
+			temp_out[tid] = temp_in[tid];
 		}
 
 		// Swap pointers: Output of this step becomes input of the next
@@ -101,7 +102,12 @@ __global__ void kogge_stone_double_buffered_kernel(const int* d_in, int* d_out, 
 	}
 
 	// Write result to global memory, temp_in always holds the most recent result
-	if (i < n) d_out[i] = temp_in[i];
+	if (global_idx < n) d_out[global_idx] = temp_in[tid];
+
+	// Write block sum to auxiliary array (last thread has the total)
+	if (d_aux != nullptr && tid == BLOCK_SIZE - 1) {
+		d_aux[blockIdx.x] = temp_in[BLOCK_SIZE - 1];
+	}
 }
 
 __global__ void kogge_stone_kernel(const int* d_in, int* d_out, int n, int* d_aux) {
@@ -138,7 +144,7 @@ __global__ void kogge_stone_kernel(const int* d_in, int* d_out, int n, int* d_au
 
 void scan_kogge_stone(const int* d_input, int n, int* d_out, void* workspace) {
 	assert(n <= BLOCK_SIZE);
-	kogge_stone_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n, nullptr);
+	kogge_stone_double_buffered_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n, nullptr);
 }
 
 __global__ void brent_kung_kernel(const int* d_in, int* d_out, int n, int* d_aux) {
@@ -355,12 +361,12 @@ void scan_segm_kogge_stone(const int* d_input, int n, int* d_out, void* workspac
 	int* d_aux = (int*)workspace;
 
 	// Step 1: Perform Local Scans and generate Block Sums
-	kogge_stone_kernel<<<num_blocks, BLOCK_SIZE>>>(d_input, d_out, n, d_aux);
+	kogge_stone_double_buffered_kernel<<<num_blocks, BLOCK_SIZE>>>(d_input, d_out, n, d_aux);
 
 	if (num_blocks < 2) return; // exit early
 
 	// Step 2: Perform Scan on Block Sums
-	kogge_stone_kernel<<<1, BLOCK_SIZE>>>(d_aux, d_aux, num_blocks, nullptr);
+	kogge_stone_double_buffered_kernel<<<1, BLOCK_SIZE>>>(d_aux, d_aux, num_blocks, nullptr);
 
 	// Step 3: Add scanned block sums to the result
 	add_block_sums_kernel<<<num_blocks, BLOCK_SIZE>>>(d_out, d_aux, n, SECTION_SIZE);
