@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <climits>
+#include <chrono>
 #include <cuda_runtime.h>
 #include "scan.h"
 
@@ -14,9 +16,9 @@ void print_array_sample(const int* arr, int n, int limit) {
 }
 
 double get_time() {
-	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-	return ts.tv_sec + ts.tv_nsec * 1e-9;
+	using namespace std::chrono;
+	auto now = high_resolution_clock::now();
+	return duration_cast<duration<double>>(now.time_since_epoch()).count();
 }
 
 void run_test(ScanAlgorithm algo, const int* input, int n, const int* ref) {
