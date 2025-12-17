@@ -8,6 +8,8 @@
 #define BLOCK_SIZE 1024
 // shared memory maximum: 49152 bytes -> coarse factor up to 12
 #define COARSE_FACTOR 12
+// single pass needs space for some other variables -> max 11
+#define COARSE_FACTOR_SP 11
 
 size_t workspace_none(int n) { return 0; }
 
@@ -144,7 +146,7 @@ __global__ void kogge_stone_kernel(const int* d_in, int* d_out, int n, int* d_au
 
 void scan_kogge_stone(const int* d_input, int n, int* d_out, void* workspace) {
 	assert(n <= BLOCK_SIZE);
-	kogge_stone_double_buffered_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n, nullptr);
+	kogge_stone_kernel<<<1, BLOCK_SIZE>>>(d_input, d_out, n, nullptr);
 }
 
 __global__ void brent_kung_kernel(const int* d_in, int* d_out, int n, int* d_aux) {
@@ -370,4 +372,116 @@ void scan_segm_kogge_stone(const int* d_input, int n, int* d_out, void* workspac
 
 	// Step 3: Add scanned block sums to the result
 	add_block_sums_kernel<<<num_blocks, BLOCK_SIZE>>>(d_out, d_aux, n, SECTION_SIZE);
+}
+
+size_t workspace_segm_single(int n) {
+	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR_SP;
+	int num_blocks = (n + SECTION_SIZE - 1) / SECTION_SIZE;
+	// Need 1 counter + 2 arrays (flags and data) for inter-block communication
+	return sizeof(int) + 2 * num_blocks * sizeof(int);
+}
+
+__global__ void single_pass_scan_kernel(const int* d_in, int* d_out, int* d_workspace, int n) {
+	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR_SP;
+	__shared__ int temp[SECTION_SIZE];
+	__shared__ int bid;
+	__shared__ int prev_sum;
+
+	// Dynamic Block Index Assignment
+	if (threadIdx.x == 0) {
+		int* counter = &d_workspace[0];
+		bid = atomicAdd(counter, 1);
+	}
+	__syncthreads();
+
+	// Calculate pointers for flags and aux_data in workspace
+	// d_workspace[0] is the counter
+	// d_workspace[1 ... num_blocks] is the data array (block aggregates)
+	// d_workspace[num_blocks+1 ... 2*num_blocks] is the flags array
+	int num_blocks = gridDim.x;
+	int* d_aux_data = &d_workspace[1];
+	int* d_flags = &d_workspace[1 + num_blocks];
+
+	// Perform standard Coarsened Scan
+	int block_offset = bid * SECTION_SIZE; // Use dynamic bid, not blockIdx.x
+	int tid = threadIdx.x;
+
+	// Load data
+	for (int i = 0; i < COARSE_FACTOR_SP; ++i) {
+		int local_idx = tid + i * BLOCK_SIZE;
+		int global_idx = block_offset + local_idx;
+		if (global_idx < n) temp[local_idx] = d_in[global_idx];
+		else temp[local_idx] = 0;
+	}
+	__syncthreads();
+
+	// Sequential Scan per Thread
+	int start_idx = tid * COARSE_FACTOR_SP;
+	for (int i = 1; i < COARSE_FACTOR_SP; ++i) {
+		temp[start_idx + i] += temp[start_idx + i - 1];
+	}
+	__syncthreads();
+
+	// Parallel Scan on Chunk Ends (Kogge-Stone)
+	for (int stride = 1; stride < BLOCK_SIZE; stride *= 2) {
+		int v = 0;
+		if (tid >= stride) {
+			v = temp[(tid - stride + 1) * COARSE_FACTOR_SP - 1];
+		}
+		__syncthreads();
+		if (tid >= stride) {
+			temp[(tid + 1) * COARSE_FACTOR_SP - 1] += v;
+		}
+		__syncthreads();
+	}
+
+	// Inter-block Synchronization (Domino Style)
+	if (tid == 0) {
+		if (bid > 0) {
+			// Wait for previous block to finish
+			while (atomicAdd(&d_flags[bid - 1], 0) == 0) { } // busy wait
+			prev_sum = d_aux_data[bid - 1];
+		}
+		else {
+			prev_sum = 0;
+		}
+		// Write total sum of this block + prev_sum to aux for the next block
+		int total_sum = temp[SECTION_SIZE - 1] + prev_sum;
+		d_aux_data[bid] = total_sum;
+
+		__threadfence(); // Ensure data is visible before flag is set
+		atomicExch(&d_flags[bid], 1); // Set flag to ready
+	}
+	__syncthreads();
+
+	// Distribute Block Sums (thread-internal) + Add Previous Block Sum
+	int incoming_carry = prev_sum;
+
+	// Distribute Block Sums to Local Chunks (Standard Coarse)
+	if (tid > 0) {
+		int block_carry = temp[tid * COARSE_FACTOR_SP - 1];
+		for (int i = 0; i < COARSE_FACTOR_SP - 1; ++i) {
+			temp[start_idx + i] += block_carry;
+		}
+	}
+
+	// Add global carry from previous blocks
+	for (int i = 0; i < COARSE_FACTOR_SP; ++i) {
+		temp[start_idx + i] += incoming_carry;
+	}
+	__syncthreads();
+
+	// Write back
+	for (int i = 0; i < COARSE_FACTOR_SP; ++i) {
+		int local_idx = tid + i * BLOCK_SIZE;
+		int global_idx = block_offset + local_idx;
+		if (global_idx < n) d_out[global_idx] = temp[local_idx];
+	}
+}
+
+void scan_segm_single(const int* d_input, int n, int* d_out, void* workspace) {
+	const int SECTION_SIZE = BLOCK_SIZE * COARSE_FACTOR_SP;
+	int num_blocks = (n + SECTION_SIZE - 1) / SECTION_SIZE;
+
+	single_pass_scan_kernel<<<num_blocks, BLOCK_SIZE>>>(d_input, d_out, (int*)workspace, n);
 }
