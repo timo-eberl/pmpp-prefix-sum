@@ -48,7 +48,7 @@ void run_test(ScanAlgorithm algo, const int* input, int n, const int* ref) {
 
 		// run once to "warm up" (GPU clocks, Driver Init, ...)
 		algo.func(d_in, n, d_out, workspace);
-		cudaMemset(d_out, 0, bytes); 
+		cudaMemset(d_out, 0, bytes);
 		if (workspace) cudaMemset(workspace, 0, workspace_bytes);
 		cudaDeviceSynchronize();
 
@@ -133,8 +133,8 @@ int main() {
 	run_test_suite(1024, 100);
 	// run_test_suite(2048, 100);
 	run_test_suite(12288, 100);
-	// run_test_suite(2000000, 2); // omp is sometimes faster
 	run_test_suite(1048576, 2);
+	run_test_suite(2000000, 2); // omp is sometimes faster
 	run_test_suite(4194304, 2);
 	run_test_suite(150994944, 2);
 	run_test_suite(500000000, 2); // can't go much higher, because GPU malloc fails
